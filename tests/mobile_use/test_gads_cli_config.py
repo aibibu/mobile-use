@@ -46,6 +46,42 @@ async def test_observe_does_not_initialize_model_configuration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_observe_loads_project_dotenv_from_another_cwd_without_overriding_process(
+    monkeypatch, tmp_path
+):
+    (tmp_path / ".env").write_text(
+        "GADS_APPIUM_URL=http://127.0.0.1:18100/grid\n"
+        "GADS_DEVICE_UDID=fixture-file-device\n"
+        "GADS_CLIENT_SECRET=fixture-file-secret\n"
+    )
+    other_cwd = tmp_path / "another-directory"
+    other_cwd.mkdir()
+    monkeypatch.setattr(gads, "PROJECT_ROOT", tmp_path)
+    monkeypatch.chdir(other_cwd)
+    for name in ("GADS_APPIUM_URL", "GADS_CLIENT_SECRET"):
+        # Track restoration even if the variable was initially absent: dotenv
+        # writes directly to os.environ rather than through monkeypatch.
+        monkeypatch.setenv(name, "fixture-reset")
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("GADS_DEVICE_UDID", "fixture-process-device")
+    observe = AsyncMock()
+    initialize = Mock(side_effect=AssertionError("observe must not initialize an LLM"))
+    monkeypatch.setattr(gads, "observe", observe)
+    monkeypatch.setattr(model_config, "initialize_llm_config", initialize)
+
+    await gads.run(argparse.Namespace(goal=None, output_dir=None, max_steps=10))
+
+    observe.assert_awaited_once()
+    assert observe.await_args is not None
+    connection, output_dir = observe.await_args.args
+    assert connection.hub_url == "http://127.0.0.1:18100/grid"
+    assert connection.udid == "fixture-process-device"
+    assert connection.client_secret == SecretStr("fixture-file-secret")
+    assert output_dir is None
+    initialize.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_goal_loads_local_override_into_the_sdk_profile(monkeypatch, tmp_path):
     node = {
         "provider": "openai",

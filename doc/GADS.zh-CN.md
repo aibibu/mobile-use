@@ -89,6 +89,12 @@ uv run --frozen python scripts/gads.py \
 `--goal` 路径会显式加载 override 为本次 SDK profile；默认只读屏路径不初始化模型。
 示例关闭遥测；只有传入 `--goal` 才进入 Agent 执行流程。
 
+使用 DeepSeek 官方 API 时，在本地未提交的 `.env` 中配置 `DEEPSEEK_API_KEY`，
+并把 `llm-config.override.jsonc` 中各角色及其 `fallback` 的 provider/model
+设为 `deepseek` / `deepseek-flash`。Cortex 需要视觉模型；该模型支持截图输入。
+此 provider 固定连接 `https://api.deepseek.com`，使用非思考模式和普通工具调用
+生成结构化输出，不使用 OpenAI 的 `json_schema` 或 DeepSeek strict beta 接口。
+
 `--max-steps` 限制 LangGraph 的图执行步数，不是手机点击次数；一次观察、决策、
 执行会经过多个图节点，因此值 10 不表示允许 10 次点击。达到上限会停止并报告错误。
 

@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 
 class Settings(BaseSettings):
     OPENAI_API_KEY: SecretStr | None = None
+    DEEPSEEK_API_KEY: SecretStr | None = None
     GOOGLE_API_KEY: SecretStr | None = None
     XAI_API_KEY: SecretStr | None = None
     OPEN_ROUTER_API_KEY: SecretStr | None = None
@@ -99,7 +100,16 @@ def record_events(output_path: Path | None, events: list[str] | BaseModel | Any)
 ### LLM Configuration
 
 LLMProvider = Literal[
-    "openai", "google", "openrouter", "xai", "vertexai", "minitap", "anthropic", "azure", "minimax"
+    "openai",
+    "google",
+    "openrouter",
+    "xai",
+    "vertexai",
+    "minitap",
+    "anthropic",
+    "azure",
+    "minimax",
+    "deepseek",
 ]
 LLMUtilsNode = Literal["outputter", "hopper", "video_analyzer"]
 LLMUtilsNodeWithFallback = LLMUtilsNode
@@ -140,6 +150,9 @@ class LLM(BaseModel):
             case "openai":
                 if not settings.OPENAI_API_KEY:
                     raise Exception(f"{name} requires OPENAI_API_KEY in .env")
+            case "deepseek":
+                if not settings.DEEPSEEK_API_KEY:
+                    raise Exception(f"{name} requires DEEPSEEK_API_KEY in .env")
             case "google":
                 if not settings.GOOGLE_API_KEY:
                     raise Exception(f"{name} requires GOOGLE_API_KEY in .env")

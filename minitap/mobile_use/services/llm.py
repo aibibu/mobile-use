@@ -160,6 +160,52 @@ def get_openai_llm(
     return client
 
 
+class DeepSeekChatOpenAI(ChatOpenAI):
+    """DeepSeek's Chat Completions dialect over the existing OpenAI transport."""
+
+    def with_structured_output(
+        self,
+        schema: Any = None,
+        *,
+        method: Literal["function_calling", "json_mode", "json_schema"] = "function_calling",
+        include_raw: bool = False,
+        strict: bool | None = False,
+        **kwargs: Any,
+    ):
+        # DeepSeek documents json_object rather than OpenAI's json_schema mode.
+        # Function calling supplies the schema and retains Pydantic validation
+        # without relying on DeepSeek's separate strict-mode beta endpoint.
+        if method == "json_schema":
+            raise ValueError("DeepSeek does not support json_schema response_format")
+        if strict:
+            raise ValueError("DeepSeek strict tool schemas require its beta endpoint")
+        return super().with_structured_output(
+            schema,
+            method=method,
+            include_raw=include_raw,
+            strict=False if method == "function_calling" else None,
+            **kwargs,
+        )
+
+
+def get_deepseek_llm(
+    model_name: str = "deepseek-flash",
+    temperature: float = 1,
+) -> DeepSeekChatOpenAI:
+    if settings.DEEPSEEK_API_KEY is None:
+        raise ValueError("DEEPSEEK_API_KEY is required")
+    return DeepSeekChatOpenAI(
+        model=model_name,
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com",
+        temperature=temperature,
+        # Named tool choice used for structured outputs is only supported in
+        # non-thinking mode. It also avoids requiring reasoning_content replay
+        # that the generic ChatOpenAI message adapter does not preserve.
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+
+
 def get_openrouter_llm(model_name: str, temperature: float = 1):
     assert settings.OPEN_ROUTER_API_KEY is not None
     client = ChatOpenAI(
@@ -272,6 +318,8 @@ def get_llm(
         return get_anthropic_llm(llm.model, temperature)
     elif llm.provider == "openai":
         return get_openai_llm(llm.model, temperature)
+    elif llm.provider == "deepseek":
+        return get_deepseek_llm(llm.model, temperature)
     elif llm.provider == "google":
         return get_google_llm(llm.model, temperature)
     elif llm.provider == "vertexai":

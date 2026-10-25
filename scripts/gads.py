@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import SecretStr
 
 # This example does not send SDK telemetry. Model requests require --goal.
@@ -13,6 +14,8 @@ os.environ["MOBILE_USE_TELEMETRY_ENABLED"] = "false"
 
 from minitap.mobile_use.clients.appium_client import RemoteAppiumClientWrapper
 from minitap.mobile_use.clients.remote_appium_config import RemoteAppiumClientConfig
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def arguments() -> argparse.Namespace:
@@ -32,6 +35,9 @@ def arguments() -> argparse.Namespace:
 
 
 def connection_config() -> RemoteAppiumClientConfig:
+    # Resolve the documented local file independently of the caller's cwd.
+    # Explicit process variables always take precedence over the file.
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
     required = ("GADS_APPIUM_URL", "GADS_DEVICE_UDID", "GADS_CLIENT_SECRET")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
