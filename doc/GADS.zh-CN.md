@@ -30,6 +30,20 @@ mobile-use Agent
 GADS 官方说明：[Grid](https://github.com/shamanec/GADS/blob/v6.1.0/docs/hub.md#appium-grid)、
 [Provider](https://github.com/shamanec/GADS/blob/v6.1.0/docs/provider.md#appium---optional)。
 
+## 当前真机部署（2026-10-25）
+
+iPhone SE3 / iOS 26.5 使用 Mac 上的 `cn.aibibu.gads.wda-iphone` LaunchAgent，
+由 Xcode `test-without-building` 持续运行 WDA。iPhone Provider 的
+`GADS_IOS_EXTERNAL_WDA_UDIDS` 仅填写这台设备的完整 UDID：对它跳过 Provider
+内置的 WDA 安装和启动，仍保留实际健康检查、USB 转发、屏幕流和 Appium。
+其他设备继续使用默认启动流程。该适配位于
+[GADS fork 的 `6087bf8`](https://github.com/aibibu/GADS/commit/6087bf8a49509701493d3a16d7843ee4b0361442)。
+
+当前 WDA 开发签名于 **2026-11-01 到期**。到期前需重新签名并部署 WDA，
+随后重启 WDA runner、确认健康，再重启 iPhone Provider。无需重建 GADS 凭证，
+也无需清除手机上的业务 App。现有机器凭证保存在本机私有配置中，测试只释放
+Appium 会话，保留凭证供后续任务使用。
+
 ## 安装和配置
 
 ```bash
@@ -110,3 +124,8 @@ finally:
 
 真机验收需另外完成：同一会话读屏 → 找到测试控件 → 点击/输入 → 观察结果 →
 释放会话，并确认登录态保持。HTTP、JS 调用栈和 HAR 采集是后续独立步骤。
+
+2026-10-25 已在上述 iPhone SE3 上通过 GADS Grid 完成一次真机验收：
+读取 375 × 667 截图和 44 个页面元素，从设置首页点击“通用”，确认出现
+“关于本机”和“软件更新”，随后释放会话。Grid 恢复设备可用状态，旧会话返回
+`invalid session id`。本次验证未调用 AI 模型，也未验证文本输入或完整业务流程。
