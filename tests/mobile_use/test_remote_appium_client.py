@@ -222,6 +222,48 @@ async def test_invalid_source_is_an_error_not_an_empty_hierarchy(driver):
         driver.page_source = source
         with pytest.raises(RemoteAppiumError):
             await client.describe_all()
+        with pytest.raises(RemoteAppiumError):
+            await client.describe_all_with_source()
+    await client.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_raw_xml_is_the_same_single_read_as_the_parsed_elements(driver, monkeypatch):
+    client = RemoteAppiumClientWrapper(config())
+    await client.init_client()
+    sources = [
+        '<?xml version="1.0"?><AppiumAUT>\n'
+        '<XCUIElementTypeButton label="First &amp; exact" x="10" y="20" '
+        'width="30" height="40" visible="false"/></AppiumAUT>',
+        '<AppiumAUT><XCUIElementTypeButton label="Second"/></AppiumAUT>',
+    ]
+    reads = []
+
+    def next_source(self):
+        index = len(reads)
+        reads.append(index)
+        return sources[index]
+
+    monkeypatch.setattr(FakeDriver, "page_source", property(next_source), raising=False)
+    elements, raw_xml = await client.describe_all_with_source()
+    assert reads == [0]
+    assert raw_xml == sources[0]
+    assert elements[0]["label"] == "First & exact"
+    assert elements[0]["visible"] is False
+
+    later_elements = await client.describe_all()
+    assert reads == [0, 1]
+    assert later_elements[0]["label"] == "Second"
+    await client.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_raw_xml_capture_keeps_the_existing_size_limit(driver, monkeypatch):
+    client = RemoteAppiumClientWrapper(config())
+    await client.init_client()
+    monkeypatch.setattr(client, "MAX_XML_BYTES", 8)
+    with pytest.raises(RemoteAppiumError):
+        await client.describe_all_with_source()
     await client.cleanup()
 
 

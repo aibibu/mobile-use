@@ -92,11 +92,19 @@ class iOSDeviceController(MobileDeviceController):
     async def get_screen_data(self) -> ScreenDataResponse:
         """Get screen data (screenshot and hierarchy in parallel)."""
         try:
+            raw_xml = None
             # Run screenshot and hierarchy fetch in parallel
-            screenshot_bytes, accessibility_info = await asyncio.gather(
-                self.ios_client.screenshot(),  # type: ignore[call-arg]
-                self.ios_client.describe_all(),
-            )
+            if isinstance(self.ios_client, RemoteAppiumClientWrapper):
+                screenshot_bytes, observation = await asyncio.gather(
+                    self.ios_client.screenshot(),
+                    self.ios_client.describe_all_with_source(),
+                )
+                accessibility_info, raw_xml = observation
+            else:
+                screenshot_bytes, accessibility_info = await asyncio.gather(
+                    self.ios_client.screenshot(),  # type: ignore[call-arg]
+                    self.ios_client.describe_all(),
+                )
 
             if screenshot_bytes is None:
                 raise RuntimeError("Screenshot returned None")
@@ -122,6 +130,7 @@ class iOSDeviceController(MobileDeviceController):
                 width=self.device_width,
                 height=self.device_height,
                 platform="ios",
+                raw_xml=raw_xml,
             )
         except Exception as e:
             logger.error(f"Failed to get screen data: {e}")

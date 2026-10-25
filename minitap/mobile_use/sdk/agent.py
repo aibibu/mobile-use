@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import os
+import re
 import shutil
 import sys
 import tempfile
@@ -67,6 +69,7 @@ from minitap.mobile_use.utils.media import (
     remove_steps_json_from_trace_folder,
 )
 from minitap.mobile_use.utils.recorder import log_agent_thought
+from minitap.mobile_use.utils.evidence import write_run_metadata
 
 logger = get_logger(__name__)
 
@@ -691,9 +694,17 @@ class Agent:
         )
 
         self._prepare_tracing(task=task, context=context)
-        await self._prepare_app_installation(task=task)
-        await self._prepare_app_lock(task=task, context=context)
-        self._prepare_output_files(task=task)
+        try:
+            await self._prepare_app_installation(task=task)
+            await self._prepare_app_lock(task=task, context=context)
+            self._prepare_output_files(task=task)
+        except BaseException as error:
+            await task.finalize(
+                error=f"Task preparation failed: {type(error).__name__}",
+                cancelled=isinstance(error, asyncio.CancelledError),
+            )
+            await self._finalize_tracing(task=task, context=context)
+            raise
 
         output_config = None
         if request.output_description or request.output_format:
@@ -1211,16 +1222,28 @@ class Agent:
             return
 
         task_name = task.get_name()
-        temp_trace_path = Path(self._tmp_traces_dir / task_name).resolve()
         traces_output_path = Path(task.request.trace_path).resolve()
+        # Persist immediately under a unique run ID; same-named tasks never share files.
+        temp_trace_path = traces_output_path / task.id
         logger.info(f"[{task_name}] 📂 Traces output path: {traces_output_path}")
         logger.info(f"[{task_name}] 📄📂 Traces temp path: {temp_trace_path}")
-        traces_output_path.mkdir(parents=True, exist_ok=True)
-        temp_trace_path.mkdir(parents=True, exist_ok=True)
+        traces_output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temp_trace_path.mkdir(mode=0o700)
+        os.chmod(temp_trace_path, 0o700)
+        write_run_metadata(
+            temp_trace_path,
+            "run",
+            {
+                "task_id": task.id,
+                "task_name": task_name,
+                "created_at": task.created_at.isoformat(),
+                "goal": task.request.goal,
+            },
+        )
 
         context.execution_setup = ExecutionSetup(
-            traces_path=self._tmp_traces_dir,
-            trace_name=task_name,
+            traces_path=traces_output_path,
+            trace_name=task.id,
         )
 
     async def _finalize_tracing(self, task: Task, context: MobileUseContext):
@@ -1234,21 +1257,42 @@ class Agent:
         task_name = task.get_name()
         status = "_PASS" if task.status == "completed" else "_FAIL"
         ts = task.created_at.strftime("%Y-%m-%dT%H-%M-%S")
-        new_name = f"{exec_setup_ctx.trace_name}{status}_{ts}"
+        safe_name = re.sub(r"[^\w. -]", "_", task_name).strip(". ")[:100] or "task"
+        new_name = f"{safe_name}{status}_{ts}_{task.id[:8]}"
 
-        temp_trace_path = (self._tmp_traces_dir / exec_setup_ctx.trace_name).resolve()
+        temp_trace_path = (exec_setup_ctx.traces_path / exec_setup_ctx.trace_name).resolve()
         traces_output_path = Path(task.request.trace_path).resolve()
 
         logger.info(f"[{task_name}] Compiling trace FROM FOLDER: " + str(temp_trace_path))
-        create_gif_from_trace_folder(temp_trace_path)
-        create_steps_json_from_trace_folder(temp_trace_path)
-
-        logger.info(f"[{task_name}] Video created, removing dust...")
-        remove_images_from_trace_folder(temp_trace_path)
-        remove_steps_json_from_trace_folder(temp_trace_path)
+        artifact_error = None
+        try:
+            create_gif_from_trace_folder(temp_trace_path)
+            create_steps_json_from_trace_folder(temp_trace_path)
+            remove_images_from_trace_folder(temp_trace_path)
+            remove_steps_json_from_trace_folder(temp_trace_path)
+        except Exception as error:
+            artifact_error = type(error).__name__
+            # Preserve raw evidence even if the optional legacy GIF cannot be compiled.
+            logger.warning(f"[{task_name}] Trace media compilation failed: {artifact_error}")
+        write_run_metadata(
+            temp_trace_path,
+            "result",
+            {
+                "task_id": task.id,
+                "status": task.status,
+                "artifact_error": artifact_error,
+                "ended_at": task.ended_at.isoformat() if task.ended_at else None,
+            },
+        )
         logger.info(f"[{task_name}] 📽️ Trace compiled, moving to output path 📽️")
 
-        output_folder_path = temp_trace_path.rename(traces_output_path / new_name).resolve()
+        try:
+            output_folder_path = temp_trace_path.rename(traces_output_path / new_name).resolve()
+        except OSError as error:
+            logger.warning(
+                f"[{task_name}] Keeping trace at original run path: {type(error).__name__}"
+            )
+            output_folder_path = temp_trace_path
         logger.info(f"[{task_name}] 📂✅ Traces located in: {output_folder_path}")
 
     def _prepare_output_files(self, task: Task):

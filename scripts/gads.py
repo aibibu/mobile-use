@@ -27,7 +27,11 @@ def arguments() -> argparse.Namespace:
         default=10,
         help="Maximum LangGraph execution steps, not the number of phone actions",
     )
-    parser.add_argument("--output-dir", type=Path, help="Save a local screenshot and element tree")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Save an observation, or per-round task evidence when used with --goal",
+    )
     args = parser.parse_args()
     if args.max_steps < 1 or args.max_steps > 100:
         parser.error("--max-steps must be between 1 and 100")
@@ -102,7 +106,10 @@ async def run(args: argparse.Namespace) -> None:
         request = (
             agent.new_task(args.goal)
             .with_max_steps(args.max_steps)
-            .with_trace_recording(False)
+            .with_trace_recording(
+                args.output_dir is not None,
+                str(args.output_dir) if args.output_dir is not None else None,
+            )
             .build()
         )
         result = await agent.run_task(request=request)

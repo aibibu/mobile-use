@@ -82,7 +82,8 @@ async def test_observe_loads_project_dotenv_from_another_cwd_without_overriding_
 
 
 @pytest.mark.asyncio
-async def test_goal_loads_local_override_into_the_sdk_profile(monkeypatch, tmp_path):
+@pytest.mark.parametrize("record_trace", [False, True])
+async def test_goal_loads_local_override_into_the_sdk_profile(monkeypatch, tmp_path, record_trace):
     node = {
         "provider": "openai",
         "model": "fixture-default",
@@ -129,7 +130,10 @@ async def test_goal_loads_local_override_into_the_sdk_profile(monkeypatch, tmp_p
 
     monkeypatch.setattr(sdk, "Agent", FixtureAgent)
 
-    await gads.run(argparse.Namespace(goal="Read the fixture title", output_dir=None, max_steps=10))
+    output_dir = tmp_path / "ai-evidence" if record_trace else None
+    await gads.run(
+        argparse.Namespace(goal="Read the fixture title", output_dir=output_dir, max_steps=10)
+    )
 
     assert captured["initialized"] and captured["cleaned"]
     actual_config = captured["config"]
@@ -139,6 +143,9 @@ async def test_goal_loads_local_override_into_the_sdk_profile(monkeypatch, tmp_p
     assert actual_config.remote_appium_config is connection
     assert captured["request"].goal == "Read the fixture title"
     assert captured["request"].max_steps == 10
+    assert captured["request"].record_trace is record_trace
+    if output_dir is not None:
+        assert captured["request"].trace_path == output_dir
 
 
 def test_max_steps_help_distinguishes_graph_steps_from_phone_actions(monkeypatch, capsys):

@@ -57,6 +57,7 @@ class ExecutionSetup(BaseModel):
 
     traces_path: Path | None = None
     trace_name: str | None = None
+    observation_count: int = 0
     app_lock_status: AppLaunchResult | None = None
 
     def get_locked_app_package(self) -> str | None:

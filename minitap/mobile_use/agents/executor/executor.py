@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from jinja2 import Template
@@ -5,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_vertexai.chat_models import ChatVertexAI
 
+from minitap.mobile_use.agents.executor.tool_node import safe_tool_call
 from minitap.mobile_use.constants import EXECUTOR_MESSAGES_KEY
 from minitap.mobile_use.context import MobileUseContext
 from minitap.mobile_use.graph.state import State
@@ -15,6 +17,7 @@ from minitap.mobile_use.tools.index import (
     get_tools_from_wrappers,
 )
 from minitap.mobile_use.utils.decorators import wrap_with_callbacks
+from minitap.mobile_use.utils.evidence import record_event, record_model_input
 from minitap.mobile_use.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,9 +76,51 @@ class ExecutorNode:
 
         llm = llm.bind_tools(**llm_bind_tools_kwargs)
         llm_fallback = llm_fallback.bind_tools(**llm_bind_tools_kwargs)
+
+        async def invoke(model, *, fallback: bool = False):
+            configured = self.ctx.llm_config.executor
+            selected = configured.fallback if fallback else configured
+            await record_model_input(
+                self.ctx,
+                state.observation_id,
+                "executor",
+                messages,
+                {
+                    "provider": selected.provider,
+                    "model": selected.model,
+                    "fallback": configured.fallback.model_dump(mode="json"),
+                    "attempt": "fallback" if fallback else "primary",
+                },
+            )
+            try:
+                return await invoke_llm_with_timeout_message(model.ainvoke(messages))
+            except BaseException as error:
+                try:
+                    await record_event(
+                        self.ctx,
+                        state.observation_id,
+                        "executor_error",
+                        {
+                            "error_type": type(error).__name__,
+                            "attempt": "fallback" if fallback else "primary",
+                            "status": "cancelled"
+                            if isinstance(error, asyncio.CancelledError)
+                            else "error",
+                        },
+                    )
+                except BaseException:
+                    logger.warning("Could not record interrupted executor model call")
+                raise
+
         response = await with_fallback(
-            main_call=lambda: invoke_llm_with_timeout_message(llm.ainvoke(messages)),
-            fallback_call=lambda: invoke_llm_with_timeout_message(llm_fallback.ainvoke(messages)),
+            main_call=lambda: invoke(llm),
+            fallback_call=lambda: invoke(llm_fallback, fallback=True),
+        )
+        await record_event(
+            self.ctx,
+            state.observation_id,
+            "executor_decision",
+            {"tool_calls": [safe_tool_call(call) for call in response.tool_calls]},
         )
         return await state.asanitize_update(
             ctx=self.ctx,

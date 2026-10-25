@@ -27,6 +27,7 @@ from minitap.mobile_use.tools.index import (
 from minitap.mobile_use.utils.conversations import get_screenshot_message_for_llm
 from minitap.mobile_use.utils.decorators import wrap_with_callbacks
 from minitap.mobile_use.utils.logger import get_logger
+from minitap.mobile_use.utils.evidence import record_event, record_model_input
 
 logger = get_logger(__name__)
 
@@ -95,10 +96,42 @@ class CortexNode:
         llm_fallback = get_llm(
             ctx=self.ctx, name="cortex", use_fallback=True, temperature=1
         ).with_structured_output(CortexOutput)
+
+        async def invoke(model, *, fallback: bool = False):
+            configured = self.ctx.llm_config.cortex
+            selected = configured.fallback if fallback else configured
+            await record_model_input(
+                self.ctx,
+                state.observation_id,
+                "cortex",
+                messages,
+                {
+                    "provider": selected.provider,
+                    "model": selected.model,
+                    "attempt": "fallback" if fallback else "primary",
+                },
+            )
+            try:
+                return await invoke_llm_with_timeout_message(model.ainvoke(messages))
+            except BaseException as error:
+                await record_event(
+                    self.ctx,
+                    state.observation_id,
+                    "cortex_error",
+                    {
+                        "type": type(error).__name__,
+                        "attempt": "fallback" if fallback else "primary",
+                    },
+                )
+                raise
+
         response: CortexOutput = await with_fallback(
-            main_call=lambda: invoke_llm_with_timeout_message(llm.ainvoke(messages)),
-            fallback_call=lambda: invoke_llm_with_timeout_message(llm_fallback.ainvoke(messages)),
+            main_call=lambda: invoke(llm),
+            fallback_call=lambda: invoke(llm_fallback, fallback=True),
         )  # type: ignore
+        await record_event(
+            self.ctx, state.observation_id, "cortex_decision", response.model_dump(mode="json")
+        )
 
         EMPTY_STRING_TOKENS = ["{}", "[]", "null", "", "None"]
 

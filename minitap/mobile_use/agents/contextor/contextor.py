@@ -16,6 +16,7 @@ from minitap.mobile_use.services.llm import get_llm, invoke_llm_with_timeout_mes
 from minitap.mobile_use.utils.app_launch_utils import launch_app_with_retries
 from minitap.mobile_use.utils.decorators import wrap_with_callbacks
 from minitap.mobile_use.utils.logger import get_logger
+from minitap.mobile_use.utils.evidence import begin_observation
 
 logger = get_logger(__name__)
 
@@ -32,6 +33,7 @@ class ContextorNode:
     async def __call__(self, state: State):
         device_controller = create_device_controller(self.ctx)
         device_data = await device_controller.get_screen_data()
+        observation_id = await begin_observation(self.ctx, device_data)
         current_app_package = await get_current_foreground_package_async(self.ctx)
         device_date = get_device_date(self.ctx)
         agent_outcome: str | None = None
@@ -69,6 +71,7 @@ class ContextorNode:
             ctx=self.ctx,
             update={
                 "latest_ui_hierarchy": device_data.elements,
+                "observation_id": observation_id,
                 "latest_screenshot": device_data.base64,
                 "focused_app_info": current_app_package,
                 "screen_size": (device_data.width, device_data.height),

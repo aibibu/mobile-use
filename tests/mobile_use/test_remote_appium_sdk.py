@@ -17,6 +17,7 @@ if vertex_module is not None and not hasattr(vertex_module, "__path__"):
 
 from minitap.mobile_use.clients.appium_client import RemoteAppiumClientWrapper  # noqa: E402
 from minitap.mobile_use.clients.ios_client import DeviceType  # noqa: E402
+from minitap.mobile_use.clients.wda_client import WdaClientWrapper  # noqa: E402
 from minitap.mobile_use.clients.remote_appium_config import RemoteAppiumClientConfig  # noqa: E402
 from minitap.mobile_use.context import DevicePlatform  # noqa: E402
 from minitap.mobile_use.controllers.controller_factory import create_device_controller  # noqa: E402
@@ -225,7 +226,9 @@ async def test_remote_controller_refreshes_rotation_and_rejects_mixed_screen(
 ):
     client = RemoteAppiumClientWrapper(config=remote_config)
     monkeypatch.setattr(client, "screenshot", AsyncMock(return_value=image_bytes((844, 390))))
-    monkeypatch.setattr(client, "describe_all", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        client, "describe_all_with_source", AsyncMock(return_value=([], "<AppiumAUT/>"))
+    )
     monkeypatch.setattr(client, "get_screen_size", AsyncMock(return_value=(844, 390)))
     controller = iOSDeviceController(client, "fixture-iphone", 390, 844)
     screen = await controller.get_screen_data()
@@ -234,6 +237,53 @@ async def test_remote_controller_refreshes_rotation_and_rejects_mixed_screen(
     monkeypatch.setattr(client, "screenshot", AsyncMock(return_value=image_bytes((390, 844))))
     with pytest.raises(RuntimeError, match="rotated"):
         await controller.get_screen_data()
+
+
+@pytest.mark.asyncio
+async def test_remote_screen_keeps_exact_xml_and_processed_tree_without_rereading(
+    remote_config, monkeypatch
+):
+    client = RemoteAppiumClientWrapper(config=remote_config)
+    raw_xml = '<AppiumAUT><XCUIElementTypeButton label="Fixture" visible="false"/></AppiumAUT>'
+    native_elements = [
+        {
+            "type": "XCUIElementTypeButton",
+            "label": "Fixture",
+            "visible": False,
+            "frame": {"x": 10, "y": 20, "width": 30, "height": 40},
+        }
+    ]
+    paired = AsyncMock(return_value=(native_elements, raw_xml))
+    unpaired = AsyncMock(side_effect=AssertionError("must not read the source twice"))
+    monkeypatch.setattr(client, "describe_all_with_source", paired)
+    monkeypatch.setattr(client, "describe_all", unpaired)
+    monkeypatch.setattr(client, "screenshot", AsyncMock(return_value=image_bytes()))
+    monkeypatch.setattr(client, "get_screen_size", AsyncMock(return_value=(390, 844)))
+    controller = iOSDeviceController(client, "fixture-iphone", 390, 844)
+
+    screen = await controller.get_screen_data()
+
+    paired.assert_awaited_once()
+    unpaired.assert_not_awaited()
+    assert screen.raw_xml == raw_xml
+    assert screen.elements[0]["bounds"] == "[10,20][40,60]"
+    assert screen.elements[0]["visible"] is False
+    assert "raw_xml" not in screen.model_dump()
+    assert raw_xml not in screen.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_local_ios_screen_retains_unpaired_capture_and_no_raw_xml():
+    client = Mock(spec=WdaClientWrapper)
+    client.screenshot = AsyncMock(return_value=image_bytes())
+    client.describe_all = AsyncMock(return_value=[])
+    controller = iOSDeviceController(client, "fixture-local", 390, 844)
+
+    screen = await controller.get_screen_data()
+
+    client.describe_all.assert_awaited_once()
+    assert screen.raw_xml is None
+    assert "raw_xml" not in screen.model_dump()
 
 
 @pytest.mark.asyncio

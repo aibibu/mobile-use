@@ -82,8 +82,12 @@ uv run --frozen python scripts/gads.py --output-dir artifacts/gads/observe
 ```bash
 uv run --frozen python scripts/gads.py \
   --goal '读取当前测试页面的标题和按钮文字，不点击、不提交' \
-  --max-steps 10
+  --max-steps 10 \
+  --output-dir artifacts/gads/ai-task
 ```
+
+AI 任务指定 `--output-dir` 时启用标准 trace，保存每轮观察、模型输入及动作证据；
+不指定时不记录。只读观察模式仍保存单次截图和元素树。
 
 模型配置沿用上游 `.env`、`llm-config.override.jsonc` 和 SDK profiles。
 `--goal` 路径会显式加载 override 为本次 SDK profile；默认只读屏路径不初始化模型。
@@ -140,6 +144,19 @@ finally:
 
 真机验收需另外完成：同一会话读屏 → 找到测试控件 → 点击/输入 → 观察结果 →
 释放会话，并确认登录态保持。HTTP、JS 调用栈和 HAR 采集是后续独立步骤。
+
+启用 `--output-dir` 的 AI 任务会为每次运行创建独立目录，并在每轮
+`evidence/round-0001/` 等目录保存：
+
+- `screen.png`：本轮控制器实际读取的截图。
+- `source.xml`：GADS iOS 本次解析的原始 XML，不另发请求重新抓取。
+- `elements.json`：本轮实际交给模型的标准化元素列表。
+- `cortex-*-input.json` 及关联图片：模型输入，图片保持实际发送前的 JPEG 字节，
+  JSON 中用文件引用和 SHA-256 关联，不重复内嵌 base64。
+- `events.jsonl`：模型结构化决策、执行器实际工具参数及成功、错误、取消或跳过状态。
+
+备用模型调用也单独记录。文件为本机私有权限，`trace.gif` 只作概览；复查模型看到的
+输入时，应以本轮证据文件为准。关闭录制时不保存这些证据。
 
 2026-10-25 已在上述 iPhone SE3 上通过 GADS Grid 完成一次真机验收：
 读取 375 × 667 截图和 44 个页面元素，从设置首页点击“通用”，确认出现

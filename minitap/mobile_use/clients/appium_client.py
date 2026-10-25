@@ -536,28 +536,35 @@ class RemoteAppiumClientWrapper(AppiumClientOperations):
             await asyncio.to_thread(_write_bytes, output_path, data)
         return data
 
+    def _read_ios_source(self) -> tuple[list[dict[str, Any]], str, tuple[int, int]]:
+        driver = self._ensure_driver()
+        for _ in range(2):
+            size = self._logical_size(driver)
+            source = driver.page_source
+            if not isinstance(source, str) or len(source.encode()) > self.MAX_XML_BYTES:
+                raise ValueError("UI source exceeds limit")
+            if "<!DOCTYPE" in source.upper() or "<!ENTITY" in source.upper():
+                raise ValueError("Unsupported XML declarations")
+            if self._logical_size(driver) != size:
+                continue
+            elements = parse_ios_source(source)
+            if len(elements) > self.MAX_ELEMENTS:
+                raise ValueError("UI source contains too many elements")
+            return elements, source, size
+        raise ValueError("Orientation changed while reading UI source")
+
     @appium_operation
     async def describe_all(self) -> list[dict[str, Any]]:
-        def describe():
-            driver = self._ensure_driver()
-            for _ in range(2):
-                size = self._logical_size(driver)
-                source = driver.page_source
-                if not isinstance(source, str) or len(source.encode()) > self.MAX_XML_BYTES:
-                    raise ValueError("UI source exceeds limit")
-                if "<!DOCTYPE" in source.upper() or "<!ENTITY" in source.upper():
-                    raise ValueError("Unsupported XML declarations")
-                if self._logical_size(driver) != size:
-                    continue
-                elements = parse_ios_source(source)
-                if len(elements) > self.MAX_ELEMENTS:
-                    raise ValueError("UI source contains too many elements")
-                return elements, size
-            raise ValueError("Orientation changed while reading UI source")
-
-        elements, size = await asyncio.to_thread(describe)
+        elements, _, size = await asyncio.to_thread(self._read_ios_source)
         self._publish_size(size)
         return elements
+
+    @appium_operation
+    async def describe_all_with_source(self) -> tuple[list[dict[str, Any]], str]:
+        """Return the parsed elements and the exact XML used for this observation."""
+        elements, source, size = await asyncio.to_thread(self._read_ios_source)
+        self._publish_size(size)
+        return elements, source
 
     @appium_operation
     async def swipe(self, x_start, y_start, x_end, y_end, duration: float | None = None) -> bool:

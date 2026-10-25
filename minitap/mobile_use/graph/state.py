@@ -38,6 +38,7 @@ class State(BaseModel):
     ]
     latest_screenshot: Annotated[str | None, "Latest screenshot base64 of the device", take_last]
     focused_app_info: Annotated[str | None, "Focused app info", take_last]
+    observation_id: Annotated[str | None, "Evidence round for this observation", take_last] = None
     device_date: Annotated[str | None, "Date of the device", take_last]
 
     # cortex related keys

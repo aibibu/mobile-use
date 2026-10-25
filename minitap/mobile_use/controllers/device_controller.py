@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from minitap.mobile_use.controllers.types import Bounds, CoordinatesSelectorRequest, TapOutput
 from minitap.mobile_use.utils.video import VideoRecordingResult
@@ -13,6 +13,9 @@ class ScreenDataResponse(BaseModel):
     width: int
     height: int
     platform: str
+    # Evidence callers may explicitly save the source. Keep it out of generic
+    # model serialization and the normal model-facing observation payload.
+    raw_xml: str | None = Field(default=None, exclude=True)
 
 
 class MobileDeviceController(Protocol):

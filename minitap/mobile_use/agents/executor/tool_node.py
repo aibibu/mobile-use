@@ -10,10 +10,61 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from minitap.mobile_use.context import MobileUseContext
 from minitap.mobile_use.services.telemetry import telemetry
+from minitap.mobile_use.utils.evidence import record_event
 from minitap.mobile_use.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_PRIVATE_ARGUMENT_KEYS = {
+    "state",
+    "runtime",
+    "toolruntime",
+    "config",
+    "store",
+    "callbacks",
+    "agentthought",
+    "toolcallid",
+    "authorization",
+    "headers",
+    "cookie",
+    "password",
+    "secret",
+    "clientsecret",
+    "apikey",
+    "accesskey",
+    "token",
+    "accesstoken",
+    "refreshtoken",
+    "idtoken",
+    "credentials",
+    "auth",
+}
+
+
+def _safe_arguments(value):
+    if isinstance(value, dict):
+        return {
+            key: _safe_arguments(item)
+            for key, item in value.items()
+            if isinstance(key, str)
+            and "".join(char for char in key.lower() if char.isalnum())
+            not in _PRIVATE_ARGUMENT_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_arguments(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return {"type": type(value).__name__}
+
+
+def safe_tool_call(call):
+    return {
+        "call_id": call.get("id"),
+        "name": call.get("name"),
+        "arguments": _safe_arguments(call.get("args", {})),
+    }
 
 
 class ExecutorToolNode(ToolNode):
@@ -29,9 +80,68 @@ class ExecutorToolNode(ToolNode):
     `ToolNode._func` and run tests/mobile_use/test_executor_tool_node.py.
     """
 
-    def __init__(self, tools, messages_key: str, trace_id: str | None = None):
+    def __init__(
+        self,
+        tools,
+        messages_key: str,
+        trace_id: str | None = None,
+        evidence_context: MobileUseContext | None = None,
+    ):
         super().__init__(tools=tools, messages_key=messages_key)
         self._trace_id = trace_id
+        self._evidence_context = evidence_context
+
+    async def _record(self, observation_id, kind, payload):
+        if self._evidence_context is not None:
+            await record_event(self._evidence_context, observation_id, kind, payload)
+
+    async def _record_abort(self, observation_id, calls, error):
+        """Finish evidence writes without replacing the original error/cancellation."""
+        if self._evidence_context is None:
+            return
+
+        async def write_events():
+            for index, call in enumerate(calls):
+                payload = safe_tool_call(call)
+                payload["status"] = (
+                    ("cancelled" if isinstance(error, asyncio.CancelledError) else "error")
+                    if index == 0
+                    else "skipped"
+                )
+                if index == 0:
+                    payload["error_type"] = type(error).__name__
+                else:
+                    payload["reason"] = "previous_tool_cancelled_or_raised"
+                await self._record(observation_id, "tool_end", payload)
+
+        pending = asyncio.create_task(write_events())
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not pending.cancelled():
+            try:
+                pending.result()
+            except Exception:
+                logger.warning("Could not record interrupted tool execution")
+
+    def _result_summary(self, output):
+        message = self._find_tool_message(output) if isinstance(output, list) else output
+        if isinstance(message, Command):
+            message = self._get_tool_message(message)
+        if not isinstance(message, ToolMessage):
+            return {"status": "error", "content": "Tool result unavailable"}
+        content = message.content
+        if isinstance(content, list):
+            content = "\n".join(
+                item if isinstance(item, str) else item.get("text", "")
+                for item in content
+                if isinstance(item, str) or isinstance(item, dict)
+            )
+        return {"status": message.status, "content": content[:2000]}
 
     @override
     async def _afunc(
@@ -84,25 +194,49 @@ class ExecutorToolNode(ToolNode):
         tool_calls, input_type = self._parse_input(input)
         outputs: list[Command | ToolMessage | list[Command | ToolMessage]] = []
         failed = False
-        for call in tool_calls:
-            tool_runtime = self._build_tool_runtime(call, input, config, runtime)
+        observation_id = (
+            input.get("observation_id")
+            if isinstance(input, dict)
+            else getattr(input, "observation_id", None)
+        )
+        for index, call in enumerate(tool_calls):
             if failed:
                 output = self._get_erroneous_command(
                     call=call,
                     message="Aborted: a previous tool call failed!",
                 )
+                await self._record(
+                    observation_id,
+                    "tool_end",
+                    {**safe_tool_call(call), "status": "skipped", "reason": "previous_tool_failed"},
+                )
             else:
-                if is_async:
-                    output = await self._arun_one(call, input_type, tool_runtime)
-                else:
-                    output = self._run_one(call, input_type, tool_runtime)
-                failed = self._has_tool_call_failed(call, output)
-                if failed is None:
-                    output = self._get_erroneous_command(
-                        call=call,
-                        message=f"Unexpected tool output type: {type(output)}",
-                    )
-                    failed = True
+                try:
+                    await self._record(observation_id, "tool_start", safe_tool_call(call))
+                    tool_runtime = self._build_tool_runtime(call, input, config, runtime)
+                    if is_async:
+                        output = await self._arun_one(call, input_type, tool_runtime)
+                    else:
+                        output = self._run_one(call, input_type, tool_runtime)
+                    failed = self._has_tool_call_failed(call, output)
+                    if failed is None:
+                        output = self._get_erroneous_command(
+                            call=call,
+                            message=f"Unexpected tool output type: {type(output)}",
+                        )
+                        failed = True
+                except BaseException as error:
+                    await self._record_abort(observation_id, tool_calls[index:], error)
+                    raise
+                await self._record(
+                    observation_id,
+                    "tool_end",
+                    {
+                        **safe_tool_call(call),
+                        "status": "error" if failed else "success",
+                        "result": self._result_summary(output),
+                    },
+                )
 
             call_without_state = copy.deepcopy(call)
             if "args" in call_without_state and "state" in call_without_state["args"]:
