@@ -18,7 +18,12 @@ from minitap.mobile_use.clients.remote_appium_config import RemoteAppiumClientCo
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--goal", help="Explicitly run this natural-language task")
-    parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=10,
+        help="Maximum LangGraph execution steps, not the number of phone actions",
+    )
     parser.add_argument("--output-dir", type=Path, help="Save a local screenshot and element tree")
     args = parser.parse_args()
     if args.max_steps < 1 or args.max_steps > 100:
@@ -73,9 +78,17 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     from minitap.mobile_use.sdk import Agent
+    from minitap.mobile_use.config import initialize_llm_config
     from minitap.mobile_use.sdk.builders.agent_config_builder import AgentConfigBuilder
+    from minitap.mobile_use.sdk.types.task import AgentProfile
 
-    agent_config = AgentConfigBuilder().build()
+    # The generic builder's implicit profile uses defaults. Make this CLI's
+    # local override file explicit, without loading model credentials in observe mode.
+    agent_config = (
+        AgentConfigBuilder()
+        .add_profile(AgentProfile(name="gads", llm_config=initialize_llm_config()))
+        .build()
+    )
     agent_config.remote_appium_config = config
     agent = Agent(config=agent_config)
     try:

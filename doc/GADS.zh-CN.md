@@ -86,7 +86,11 @@ uv run --frozen python scripts/gads.py \
 ```
 
 模型配置沿用上游 `.env`、`llm-config.override.jsonc` 和 SDK profiles。
+`--goal` 路径会显式加载 override 为本次 SDK profile；默认只读屏路径不初始化模型。
 示例关闭遥测；只有传入 `--goal` 才进入 Agent 执行流程。
+
+`--max-steps` 限制 LangGraph 的图执行步数，不是手机点击次数；一次观察、决策、
+执行会经过多个图节点，因此值 10 不表示允许 10 次点击。达到上限会停止并报告错误。
 
 ## Python SDK
 
@@ -96,10 +100,16 @@ import os
 from pydantic import SecretStr
 
 from minitap.mobile_use.clients.remote_appium_config import RemoteAppiumClientConfig
+from minitap.mobile_use.config import initialize_llm_config
 from minitap.mobile_use.sdk import Agent
 from minitap.mobile_use.sdk.builders.agent_config_builder import AgentConfigBuilder
+from minitap.mobile_use.sdk.types.task import AgentProfile
 
-config = AgentConfigBuilder().build()
+config = (
+    AgentConfigBuilder()
+    .add_profile(AgentProfile(name="gads", llm_config=initialize_llm_config()))
+    .build()
+)
 config.remote_appium_config = RemoteAppiumClientConfig(
     hub_url=os.environ["GADS_APPIUM_URL"],
     udid=os.environ["GADS_DEVICE_UDID"],
