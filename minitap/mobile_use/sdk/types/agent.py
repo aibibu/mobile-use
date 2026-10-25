@@ -3,9 +3,10 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from langchain_core.callbacks.base import Callbacks
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from minitap.mobile_use.clients.ios_client_config import BrowserStackClientConfig, IosClientConfig
+from minitap.mobile_use.clients.remote_appium_config import RemoteAppiumClientConfig
 from minitap.mobile_use.context import DevicePlatform
 from minitap.mobile_use.controllers.cloud_device_controller import (
     CloudAndroidController,
@@ -106,6 +107,7 @@ class AgentConfig(BaseModel):
         cloud_device_config: Configuration for cloud device provisioning.
         cloud_android_controller: Pre-configured cloud Android controller.
         cloud_ios_controller: Pre-configured cloud iOS controller.
+        remote_appium_config: Existing remote Appium/Grid iOS device connection.
     """
 
     agent_profiles: dict[str, AgentProfile]
@@ -121,5 +123,37 @@ class AgentConfig(BaseModel):
     cloud_device_config: CloudDeviceConfig | None = None
     cloud_android_controller: CloudAndroidController | None = None
     cloud_ios_controller: CloudIosController | None = None
+    remote_appium_config: RemoteAppiumClientConfig | None = None
 
     model_config = {"arbitrary_types_allowed": True}
+
+    def ensure_remote_appium_compatible(self) -> None:
+        if self.remote_appium_config is not None and any(
+            provider is not None
+            for provider in (
+                self.browserstack_config,
+                self.cloud_device_config,
+                self.cloud_android_controller,
+                self.cloud_ios_controller,
+                self.ios_client_config,
+            )
+        ):
+            raise ValueError("remote_appium_config cannot be combined with another device provider")
+        if self.remote_appium_config is not None and self.device_platform not in (
+            None,
+            DevicePlatform.IOS,
+        ):
+            raise ValueError("remote_appium_config currently supports iOS only")
+        if self.remote_appium_config is not None and self.video_recording_enabled:
+            raise ValueError("Video recording is not yet supported for remote Appium devices")
+        if (
+            self.remote_appium_config is not None
+            and self.device_id is not None
+            and self.device_id != self.remote_appium_config.udid
+        ):
+            raise ValueError("device_id must match remote_appium_config.udid")
+
+    @model_validator(mode="after")
+    def validate_remote_appium_provider(self) -> "AgentConfig":
+        self.ensure_remote_appium_compatible()
+        return self

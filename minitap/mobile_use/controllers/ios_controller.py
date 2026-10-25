@@ -11,6 +11,7 @@ from pathlib import Path
 from idb.common.types import HIDButtonType
 from PIL import Image
 
+from minitap.mobile_use.clients.appium_client import RemoteAppiumClientWrapper
 from minitap.mobile_use.clients.idb_client import IdbClientWrapper, IOSAppInfo
 from minitap.mobile_use.clients.ios_client import IosClientWrapper
 from minitap.mobile_use.controllers.device_controller import (
@@ -58,7 +59,9 @@ class iOSDeviceController(MobileDeviceController):
         """Tap at specific coordinates using IDB."""
         try:
             duration = long_press_duration / 1000.0 if long_press else None
-            await self.ios_client.tap(x=coords.x, y=coords.y, duration=duration)  # type: ignore[call-arg]
+            result = await self.ios_client.tap(x=coords.x, y=coords.y, duration=duration)  # type: ignore[call-arg]
+            if result is False:
+                return TapOutput(error="iOS client rejected the tap")
             return TapOutput(error=None)
         except Exception as e:
             return TapOutput(error=f"IDB tap failed: {str(e)}")
@@ -73,13 +76,15 @@ class iOSDeviceController(MobileDeviceController):
         try:
             # IDB delta is the number of steps, approximating from duration
             ms_duration_to_percentage = duration / 1000.0
-            await self.ios_client.swipe(  # type: ignore[call-arg]
+            result = await self.ios_client.swipe(  # type: ignore[call-arg]
                 x_start=start.x,
                 y_start=start.y,
                 x_end=end.x,
                 y_end=end.y,
                 duration=ms_duration_to_percentage,
             )
+            if result is False:
+                return "iOS client rejected the swipe"
             return None
         except Exception as e:
             return f"IDB swipe failed: {str(e)}"
@@ -95,6 +100,15 @@ class iOSDeviceController(MobileDeviceController):
 
             if screenshot_bytes is None:
                 raise RuntimeError("Screenshot returned None")
+
+            if isinstance(self.ios_client, RemoteAppiumClientWrapper):
+                # The remote wrapper normalizes screenshots to the same logical
+                # point coordinates as Appium's element frames and pointer input.
+                # It also updates the bound SDK context when rotation changes size.
+                self.device_width, self.device_height = await self.ios_client.get_screen_size()
+                with Image.open(BytesIO(screenshot_bytes)) as image:
+                    if image.size != (self.device_width, self.device_height):
+                        raise RuntimeError("Device rotated while reading the screen; read it again")
 
             elements = (
                 self._process_flat_ios_hierarchy(accessibility_info) if accessibility_info else []
@@ -185,8 +199,8 @@ class iOSDeviceController(MobileDeviceController):
     async def press_enter(self) -> bool:
         """Press the enter/return key."""
         try:
-            await self.ios_client.key(40)  # type: ignore[call-arg]
-            return True
+            result = await self.ios_client.key(40)  # type: ignore[call-arg]
+            return result is not False
         except Exception as e:
             logger.error(f"Failed to press enter: {e}")
             return False
@@ -197,6 +211,8 @@ class iOSDeviceController(MobileDeviceController):
             accessibility_info = await asyncio.wait_for(
                 self.ios_client.describe_all(), timeout=40.0
             )
+            if isinstance(self.ios_client, RemoteAppiumClientWrapper):
+                self.device_width, self.device_height = await self.ios_client.get_screen_size()
             if accessibility_info is None:
                 logger.warning("Accessibility info returned None")
                 return []
@@ -204,9 +220,13 @@ class iOSDeviceController(MobileDeviceController):
             hierarchy = self._process_flat_ios_hierarchy(accessibility_info)
             return hierarchy
         except TimeoutError:
+            if isinstance(self.ios_client, RemoteAppiumClientWrapper):
+                raise
             logger.error("Timeout waiting for UI hierarchy (40s)")
             return []
         except Exception as e:
+            if isinstance(self.ios_client, RemoteAppiumClientWrapper):
+                raise
             logger.error(f"Failed to get UI hierarchy: {e}")
             return []
 
@@ -233,7 +253,7 @@ class iOSDeviceController(MobileDeviceController):
                 "label": node.get("AXLabel") or node.get("label", ""),
                 "frame": node.get("frame", {}),
                 "enabled": node.get("enabled", False),
-                "visible": True,
+                "visible": node.get("visible", True),
             }
 
             # Add bounds if frame is available
@@ -317,7 +337,9 @@ class iOSDeviceController(MobileDeviceController):
                 nb_chars = 50  # Default to erasing 50 characters
             # iOS delete key code is 42 (HID keyboard delete)
             for _ in range(nb_chars):
-                await self.ios_client.key(42)  # type: ignore[call-arg]
+                result = await self.ios_client.key(42)  # type: ignore[call-arg]
+                if result is False:
+                    return False
             return True
         except Exception as e:
             logger.error(f"Failed to erase text: {e}")

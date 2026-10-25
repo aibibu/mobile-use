@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import TypedDict
 
 from minitap.mobile_use.clients.browserstack_client import BrowserStackClientWrapper
+from minitap.mobile_use.clients.appium_client import RemoteAppiumClientWrapper
 from minitap.mobile_use.clients.idb_client import IdbClientWrapper
 from minitap.mobile_use.clients.ios_client_config import IosClientConfig
 from minitap.mobile_use.clients.wda_client import WdaClientWrapper
@@ -21,7 +22,11 @@ def _run_host_cmd(cmd: list[str]) -> str:
 
 # Type alias for the union of all client wrappers
 IosClientWrapper = (
-    IdbClientWrapper | WdaClientWrapper | BrowserStackClientWrapper | CloudIosController
+    IdbClientWrapper
+    | WdaClientWrapper
+    | BrowserStackClientWrapper
+    | CloudIosController
+    | RemoteAppiumClientWrapper
 )
 
 
@@ -31,6 +36,7 @@ class DeviceType(StrEnum):
     SIMULATOR = "SIMULATOR"
     PHYSICAL = "PHYSICAL"
     BROWSERSTACK = "BROWSERSTACK"
+    REMOTE_APPIUM = "REMOTE_APPIUM"
     CLOUD = "CLOUD"
     UNKNOWN = "UNKNOWN"
 

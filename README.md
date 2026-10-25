@@ -1,5 +1,8 @@
 # mobile-use: automate your phone with natural language
 
+> **Aibibu fork:** GADS remote iPhone integration and setup are documented in
+> [GADS 接入说明](doc/GADS.zh-CN.md). The upstream local-device and cloud connectors remain available.
+
 <div align="center">
 
 ![mobile-use in Action](./doc/banner-v2.png)

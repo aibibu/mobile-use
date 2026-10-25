@@ -4,10 +4,8 @@ from typing import Any
 
 from appium.options.common.base import AppiumOptions
 from appium.webdriver.webdriver import WebDriver
-from selenium.webdriver.common.actions import interaction
-from selenium.webdriver.common.actions.action_builder import ActionBuilder
-from selenium.webdriver.common.actions.pointer_input import PointerInput
 
+from minitap.mobile_use.clients.appium_client import AppiumClientOperations, parse_ios_source
 from minitap.mobile_use.clients.idb_client import IOSAppInfo
 from minitap.mobile_use.clients.ios_client_config import BrowserStackClientConfig
 from minitap.mobile_use.utils.logger import get_logger
@@ -45,7 +43,7 @@ def with_browserstack_client(func):
     return wrapper
 
 
-class BrowserStackClientWrapper:
+class BrowserStackClientWrapper(AppiumClientOperations):
     """Wrapper around Appium WebDriver for BrowserStack iOS device automation.
 
     This wrapper provides an interface similar to IdbClientWrapper and WdaClientWrapper
@@ -86,8 +84,18 @@ class BrowserStackClientWrapper:
         Args:
             config: BrowserStack configuration with credentials and device settings
         """
+        super().__init__()
         self.config = config
-        self._driver: WebDriver | None = None
+
+    def _operation_error(self, name: str, error: Exception, return_type):
+        # Preserve BrowserStack's historical bool/None fallback contract.
+        logger.error(f"Failed to {name}: {error}")
+        return False if return_type is bool else None
+
+    def _check_launch_options(self, args, env):
+        logger.warning(
+            "BrowserStack does not support app launch arguments or environment variables"
+        )
 
     async def init_client(self) -> bool:
         """Initialize the Appium WebDriver session on BrowserStack.
@@ -185,174 +193,6 @@ class BrowserStackClientWrapper:
         return self._driver
 
     @with_browserstack_client
-    async def tap(self, x: int, y: int, duration: float | None = None) -> bool:
-        """Tap at the specified coordinates.
-
-        Args:
-            x: X coordinate
-            y: Y coordinate
-            duration: Optional tap duration in seconds (for long press)
-
-        Returns:
-            True if tap succeeded, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        def perform_tap():
-            finger = PointerInput(interaction.POINTER_TOUCH, "finger")
-            actions = ActionBuilder(driver, mouse=finger)
-            actions.pointer_action.move_to_location(x, y)
-            actions.pointer_action.pointer_down()
-            if duration:
-                actions.pointer_action.pause(duration)
-            actions.pointer_action.pointer_up()
-            actions.perform()
-
-        await asyncio.to_thread(perform_tap)
-        return True
-
-    @with_browserstack_client
-    async def swipe(
-        self,
-        x_start: int,
-        y_start: int,
-        x_end: int,
-        y_end: int,
-        duration: float | None = None,
-    ) -> bool:
-        """Swipe from start coordinates to end coordinates.
-
-        Args:
-            x_start: Starting X coordinate
-            y_start: Starting Y coordinate
-            x_end: Ending X coordinate
-            y_end: Ending Y coordinate
-            duration: Optional swipe duration in seconds
-
-        Returns:
-            True if swipe succeeded, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        swipe_duration = duration or 0.5
-
-        def perform_swipe():
-            finger = PointerInput(interaction.POINTER_TOUCH, "finger")
-            actions = ActionBuilder(driver, mouse=finger)
-            actions.pointer_action.move_to_location(x_start, y_start)
-            actions.pointer_action.pointer_down()
-            actions.pointer_action.pause(swipe_duration)
-            actions.pointer_action.move_to_location(x_end, y_end)
-            actions.pointer_action.pointer_up()
-            actions.perform()
-
-        await asyncio.to_thread(perform_swipe)
-        return True
-
-    @with_browserstack_client
-    async def screenshot(self, output_path: str | None = None) -> bytes | None:
-        """Take a screenshot and return raw image data.
-
-        Args:
-            output_path: Optional path to save the screenshot
-
-        Returns:
-            Raw image data (PNG bytes) or None on failure
-        """
-        driver = self._ensure_driver()
-
-        screenshot_base64 = await asyncio.to_thread(driver.get_screenshot_as_base64)
-
-        import base64
-
-        screenshot_data = base64.b64decode(screenshot_base64)
-
-        if output_path:
-            with open(output_path, "wb") as f:
-                f.write(screenshot_data)
-
-        return screenshot_data
-
-    @with_browserstack_client
-    async def launch(
-        self,
-        bundle_id: str,
-        args: list[str] | None = None,
-        env: dict[str, str] | None = None,
-    ) -> bool:
-        """Launch an application by bundle ID.
-
-        Args:
-            bundle_id: The bundle identifier of the app to launch
-            args: Optional list of arguments to pass to the app (not supported on BrowserStack)
-            env: Optional environment variables for the app (not supported on BrowserStack)
-
-        Returns:
-            True if launch succeeded, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        if args or env:
-            logger.warning(
-                "BrowserStack does not support app launch arguments or environment variables"
-            )
-
-        script = "mobile: launchApp"
-        params = {"bundleId": bundle_id}
-
-        await asyncio.to_thread(driver.execute_script, script, params)
-        return True
-
-    @with_browserstack_client
-    async def terminate(self, bundle_id: str) -> bool:
-        """Terminate an application by bundle ID.
-
-        Args:
-            bundle_id: The bundle identifier of the app to terminate
-
-        Returns:
-            True if termination succeeded, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        script = "mobile: terminateApp"
-        params = {"bundleId": bundle_id}
-
-        await asyncio.to_thread(driver.execute_script, script, params)
-        return True
-
-    @with_browserstack_client
-    async def text(self, text: str) -> bool:
-        """Type text using the keyboard.
-
-        Args:
-            text: The text to type
-
-        Returns:
-            True if text input succeeded, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        active_element = await asyncio.to_thread(lambda: driver.switch_to.active_element)
-        await asyncio.to_thread(active_element.send_keys, text)
-        return True
-
-    @with_browserstack_client
-    async def open_url(self, url: str) -> bool:
-        """Open a URL on the device.
-
-        Args:
-            url: The URL to open
-
-        Returns:
-            True if URL opened successfully, False otherwise
-        """
-        driver = self._ensure_driver()
-
-        await asyncio.to_thread(driver.get, url)
-        return True
-
-    @with_browserstack_client
     async def key(self, key_code: int) -> bool:
         """Send a key press.
 
@@ -422,32 +262,11 @@ class BrowserStackClientWrapper:
 
     def _parse_xml_to_elements(self, xml_source: str) -> list[dict[str, Any]]:
         """Parse Appium XML source into flat element list matching IDB format."""
-        import xml.etree.ElementTree as ET
-
-        elements = []
         try:
-            root = ET.fromstring(xml_source)
-            for elem in root.iter():
-                if elem.tag == "AppiumAUT":
-                    continue
-                frame = {
-                    "x": float(elem.get("x", 0)),
-                    "y": float(elem.get("y", 0)),
-                    "width": float(elem.get("width", 0)),
-                    "height": float(elem.get("height", 0)),
-                }
-                element = {
-                    "type": elem.get("type", elem.tag),
-                    "value": elem.get("value", ""),
-                    "label": elem.get("label", elem.get("name", "")),
-                    "frame": frame,
-                    "enabled": elem.get("enabled", "false").lower() == "true",
-                    "visible": elem.get("visible", "true").lower() == "true",
-                }
-                elements.append(element)
-        except ET.ParseError as e:
-            logger.error(f"Failed to parse XML: {e}")
-        return elements
+            return parse_ios_source(xml_source)
+        except Exception as error:
+            logger.error(f"Failed to parse XML: {error}")
+            return []
 
     async def app_current(self) -> IOSAppInfo | None:
         """Get information about the currently active app.

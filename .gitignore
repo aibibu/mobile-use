@@ -11,3 +11,6 @@ llm-config.override.jsonc
 .ios_udid
 
 *.DS_Store
+
+# Local GADS observations (screenshots and UI text)
+/artifacts/gads/

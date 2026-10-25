@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from minitap.mobile_use.agents.outputter.outputter import outputter
 from minitap.mobile_use.clients.browserstack_client import BrowserStackClientWrapper
+from minitap.mobile_use.clients.appium_client import RemoteAppiumClientWrapper
 from minitap.mobile_use.clients.idb_client import IdbClientWrapper
 from minitap.mobile_use.clients.ios_client import DeviceType, IosClientWrapper, get_ios_client
 from minitap.mobile_use.clients.ui_automator_client import UIAutomatorClient
@@ -95,6 +96,7 @@ class Agent:
         self._tmp_traces_dir = Path(tempfile.gettempdir()) / "mobile-use-traces"
         self._initialized = False
         self._task_lock = asyncio.Lock()
+        self._remote_appium_lock = asyncio.Lock()
 
     async def init(
         self,
@@ -126,6 +128,9 @@ class Agent:
         retry_count: int = 5,
         retry_wait_seconds: int = 5,
     ):
+        if self._config.remote_appium_config is not None:
+            return await self._init_remote_appium()
+
         # Handle BrowserStack initialization
         if self._config.browserstack_config:
             logger.info("Initializing BrowserStack session...")
@@ -242,6 +247,58 @@ class Agent:
             platform=platform.value,
             device_id=device_id,
         )
+        return True
+
+    async def _init_remote_appium(self) -> bool:
+        """Connect an existing iOS device through Appium without starting local services."""
+        async with self._remote_appium_lock:
+            return await self._connect_remote_appium()
+
+    async def _connect_remote_appium(self) -> bool:
+        # Builders and callers may assign fields after Pydantic construction.
+        # Recheck the routing constraints without dumping/excluding the secret.
+        self._config.ensure_remote_appium_compatible()
+        if self._initialized:
+            return True
+
+        config = self._config.remote_appium_config
+        if config is None:
+            raise ValueError("remote_appium_config is required")
+
+        previous_client = getattr(self, "_ios_client", None)
+        if isinstance(previous_client, RemoteAppiumClientWrapper):
+            # A previous cleanup may have failed. Do not lose that owned session
+            # by replacing its client with a second connection.
+            await previous_client.cleanup()
+            self._ios_client = None
+
+        client = RemoteAppiumClientWrapper(config=config)
+        self._ios_client = client
+        self._adb_client = None
+        self._ui_adb_client = None
+        self._ios_device_type = DeviceType.REMOTE_APPIUM
+        try:
+            if not await client.init_client():
+                raise ServerStartupError(message="Failed to create the remote Appium session")
+            self._device_context = await self._get_device_context(
+                device_id=config.udid, platform=DevicePlatform.IOS
+            )
+            client.bind_device_context(self._device_context)
+        except BaseException:
+            # Initialization can be cancelled after the remote session was created.
+            # Let the client finish its owned-session cleanup before propagating it.
+            await asyncio.shield(client.cleanup())
+            self._ios_client = None
+            self._ios_device_type = None
+            self._initialized = False
+            raise
+
+        self._initialized = True
+        telemetry.capture_agent_initialized(
+            platform=DevicePlatform.IOS.value,
+            device_id=config.udid,
+        )
+        logger.info("Mobile-use agent initialized with the remote Appium device")
         return True
 
     async def install_apk(self, apk_path: str | Path) -> None:
@@ -579,6 +636,8 @@ class Agent:
     ) -> str | dict | TOutput | None:
         if not self._initialized:
             raise AgentNotInitializedError()
+        if self._config.remote_appium_config is not None:
+            self._config.ensure_remote_appium_compatible()
 
         if request.profile:
             agent_profile = self._config.agent_profiles.get(request.profile)
@@ -821,6 +880,12 @@ class Agent:
         elif self._device_context.mobile_platform == DevicePlatform.IOS:
             from io import BytesIO
 
+            if isinstance(self._ios_client, RemoteAppiumClientWrapper):
+                screenshot_bytes = await self._ios_client.screenshot()
+                if screenshot_bytes is None:
+                    raise RuntimeError("Remote Appium screenshot returned no image")
+                return Image.open(BytesIO(screenshot_bytes))
+
             if isinstance(self._ios_client, CloudIosController):
                 logger.info("Capturing screenshot from cloud iOS device")
                 screenshot_bytes = await self._ios_client.screenshot()
@@ -865,6 +930,31 @@ class Agent:
             raise Exception(f"Unsupported platform: {self._device_context.mobile_platform}")
 
     async def clean(self, force: bool = False):
+        if self._config.remote_appium_config is not None:
+            async with self._remote_appium_lock:
+                task = self._current_task
+                if task is not None and task is not asyncio.current_task() and not task.done():
+                    self.stop_current_task()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        # The task caller observes its failure. Cleanup must still
+                        # release the device if task finalization itself fails.
+                        pass
+                # The client may exist after a partial initialization; do not gate
+                # cleanup on _initialized, which requires verified dimensions.
+                client = getattr(self, "_ios_client", None)
+                if isinstance(client, RemoteAppiumClientWrapper):
+                    await client.cleanup()
+                    self._ios_client = None
+                self._ios_device_type = None
+                self._initialized = False
+                if telemetry._session_id and telemetry._session_context.get("source") == "sdk":
+                    telemetry.end_session(success=True)
+            return
+
         if self._cloud_instance_id:
             await self._cleanup_cloud_device()
             self._initialized = False
@@ -1303,7 +1393,18 @@ class Agent:
                 logger.warning("UIAutomator client not available, using default dimensions")
                 device_width, device_height = 1080, 2340
         else:  # iOS
-            if self._ios_client:
+            if isinstance(self._ios_client, RemoteAppiumClientWrapper):
+                device_width, device_height = await self._ios_client.get_screen_size()
+                if (
+                    not isinstance(device_width, int)
+                    or isinstance(device_width, bool)
+                    or not isinstance(device_height, int)
+                    or isinstance(device_height, bool)
+                    or device_width <= 0
+                    or device_height <= 0
+                ):
+                    raise ValueError("Remote Appium returned invalid logical screen dimensions")
+            elif self._ios_client:
                 try:
                     # Use iOS client to take a screenshot and get dimensions
                     screenshot_data = await self._ios_client.screenshot()  # type: ignore[call-arg]
