@@ -76,9 +76,20 @@ Available tools: {{ executor_tools_list }}
 | Clear text | `focus_and_clear_text` | If fails, try: long press → select all → `erase_one_char` |
 
 ### Swipe Physics
-Swipe direction "pushes" the screen: **swipe RIGHT → reveals LEFT page** (and vice versa).
+Directions always describe **finger movement**, not the destination page or content.
 Default to **percentage-based** swipes. Use coordinates only for precise controls (sliders).
-Memory aid: Swipe RIGHT (low→high x) to see LEFT page. Swipe LEFT (high→low x) to see RIGHT page.
+For `swipe_percentages`, use the exact fields `start_x_percent`, `start_y_percent`, `end_x_percent`, and `end_y_percent`.
+Each value is an **integer from 0 to 100**: `80` means 80%, not `0.8`. The origin is the top-left corner; X increases rightward and Y downward.
+
+| Finger direction | Start `(x, y)` → End `(x, y)`, in integer percentages |
+|------------------|------------------------------------------------------|
+| LEFT | `(80, 50)` → `(20, 50)` |
+| RIGHT | `(20, 50)` → `(80, 50)` |
+| UP | `(50, 80)` → `(50, 20)` |
+| DOWN | `(50, 20)` → `(50, 80)` |
+
+For a horizontally paginated home screen, swiping RIGHT typically reveals the page to the LEFT (previous page); swiping LEFT typically reveals the page to the RIGHT (next page). Verify the actual result from the next observation.
+The action JSON and its explanation must agree on the **final finger direction**.
 
 ### Form Filling
 Before concluding a field is missing, **scroll through the entire form** to verify all fields. If you observed a field earlier but can't find it now, scroll back - don't assume it's gone.

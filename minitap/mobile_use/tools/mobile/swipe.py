@@ -125,15 +125,51 @@ def get_composite_swipe_tools(ctx: MobileUseContext) -> list[BaseTool]:
     @tool
     async def swipe_percentages(
         agent_thought: str,
-        start_x_percent: int = Field(description="Start X percent (0-100)", ge=0, le=100),
-        start_y_percent: int = Field(description="Start Y percent (0-100)", ge=0, le=100),
-        end_x_percent: int = Field(description="End X percent (0-100)", ge=0, le=100),
-        end_y_percent: int = Field(description="End Y percent (0-100)", ge=0, le=100),
+        start_x_percent: int = Field(
+            description=(
+                "Finger start X, integer 0-100 (0=left edge, 100=right edge). "
+                "Use 80 for 80%, not 0.8. With Y unchanged, start X 80 to end X 20 "
+                "swipes LEFT; start X 20 to end X 80 swipes RIGHT."
+            ),
+            ge=0,
+            le=100,
+        ),
+        start_y_percent: int = Field(
+            description=(
+                "Finger start Y, integer 0-100 (0=top edge, 100=bottom edge). "
+                "Use 80 for 80%, not 0.8. With X unchanged, start Y 80 to end Y 20 "
+                "swipes UP; start Y 20 to end Y 80 swipes DOWN."
+            ),
+            ge=0,
+            le=100,
+        ),
+        end_x_percent: int = Field(
+            description=(
+                "Finger end X, integer 0-100 (0=left edge, 100=right edge). "
+                "Less than start_x_percent moves the finger LEFT; "
+                "greater than start_x_percent moves the finger RIGHT."
+            ),
+            ge=0,
+            le=100,
+        ),
+        end_y_percent: int = Field(
+            description=(
+                "Finger end Y, integer 0-100 (0=top edge, 100=bottom edge). "
+                "Less than start_y_percent moves the finger UP; "
+                "greater than start_y_percent moves the finger DOWN."
+            ),
+            ge=0,
+            le=100,
+        ),
         duration: int = Field(description="Duration in ms", ge=1, le=10000, default=400),
         tool_call_id: Annotated[str, InjectedToolCallId] = None,  # type: ignore
         state: Annotated[State, InjectedState] = None,  # type: ignore
     ) -> Command:
-        """Swipe using percentage coordinates from start position to end position."""
+        """Swipe using integer screen percentages from the finger's start to end position.
+
+        Directions describe finger movement, not the destination page or content.
+        The origin is the top-left corner; X increases rightward and Y downward.
+        """
         swipe_request = SwipeRequest(
             swipe_mode=SwipeStartEndPercentagesRequest(
                 start=PercentagesSelectorRequest(
